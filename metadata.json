@@ -1,0 +1,6 @@
+{
+  "name": "Zelvo — Serviços no Terreno",
+  "description": "Plataforma PWA Mobile-First e Offline-First de gestão de serviços no terreno para jardinagem, piscinas e manutenção técnica.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Zelvo — Serviços no Terreno",
+  "short_name": "Zelvo",
+  "description": "Gestão Mobile-First e Offline-First de serviços no terreno: agenda, execução em campo, leads, clientes, orçamentos e finanças.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#1E293B",
+  "background_color": "#F8FAFC",
+  "lang": "pt-PT",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
