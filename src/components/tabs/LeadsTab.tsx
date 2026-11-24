@@ -1,9 +1,12 @@
 import React, { useMemo, useState } from 'react';
+import { differenceInCalendarDays, isBefore, parseISO } from 'date-fns';
 import {
+  BellRing,
   CalendarPlus,
   CheckCircle2,
   FileText,
   MapPin,
+  MessageCircle,
   Phone,
   Plus,
   UserPlus,
@@ -11,12 +14,14 @@ import {
 } from 'lucide-react';
 import {
   formatDatePT,
+  formatShortDatePT,
   LEAD_SOURCE_LABELS,
   LEAD_STATUS_LABELS,
   LOST_REASONS,
 } from '../../i18n/pt-PT';
 import { useZelvo } from '../../store/ZelvoContext';
 import type { Lead, LeadStatus } from '../../types/database';
+import { buildWhatsAppUrl } from '../../utils/calculations';
 import {
   BottomSheet,
   EmptyState,
@@ -48,11 +53,27 @@ const LEAD_STATUS_TONE: Record<LeadStatus, SemanticTone> = {
   LOST: 'danger',
 };
 
+function isLeadFollowupPending(lead: Lead, now = new Date()): boolean {
+  if (lead.status !== 'QUOTE_SENT') return false;
+  if (lead.next_followup_at) {
+    return isBefore(parseISO(lead.next_followup_at), now);
+  }
+  return differenceInCalendarDays(now, parseISO(lead.updated_at)) >= 3;
+}
+
 export const LeadsTab: React.FC<LeadsTabProps> = ({
   onCreateQuoteForLead,
   onScheduleFirstVisit,
 }) => {
-  const { db, createLead, updateLeadStatus, convertLeadToClient, showToast } = useZelvo();
+  const {
+    db,
+    organization,
+    createLead,
+    updateLeadStatus,
+    logLeadFollowupSent,
+    convertLeadToClient,
+    showToast,
+  } = useZelvo();
 
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'ALL'>('NEW');
   const [newLeadOpen, setNewLeadOpen] = useState(false);
@@ -91,6 +112,11 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
     }
     return map;
   }, [activeLeads]);
+
+  const pendingFollowupLeads = useMemo(
+    () => activeLeads.filter((l) => isLeadFollowupPending(l)),
+    [activeLeads]
+  );
 
   const filteredLeads = useMemo(
     () =>
@@ -157,6 +183,31 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
         </PrimaryButton>
       </div>
 
+      {/* Automatic Follow-up Alert Counter Banner */}
+      {pendingFollowupLeads.length > 0 && (
+        <div className="rounded-xl bg-[#FEF3C7] border border-[#FDE68A] px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-[#92400E]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <BellRing className="w-5 h-5 text-[#B45309] shrink-0" />
+            <p className="text-[14px] font-semibold">
+              <span className="tabular-nums font-bold">{pendingFollowupLeads.length}</span>{' '}
+              {pendingFollowupLeads.length === 1
+                ? 'orçamento enviado aguarda follow-up'
+                : 'orçamentos enviados aguardam follow-up'}{' '}
+              (há mais de 3 dias)
+            </p>
+          </div>
+          {statusFilter !== 'QUOTE_SENT' && (
+            <button
+              type="button"
+              onClick={() => setStatusFilter('QUOTE_SENT')}
+              className="min-h-11 px-3.5 rounded-lg bg-[#92400E] hover:bg-[#78350F] text-white text-[13px] font-semibold whitespace-nowrap cursor-pointer"
+            >
+              Ver Pendentes
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Horizontal Filter Bar for the 5 states + Todos */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
         {LEAD_STATUS_ORDER.map((status) => {
@@ -217,10 +268,18 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                 )
               : null;
 
+            const followupPending = isLeadFollowupPending(lead);
+            const followupWhatsAppUrl = buildWhatsAppUrl(
+              lead.phone,
+              `Olá ${lead.name}! Da parte da ${organization.name}, passamos apenas para saber se teve oportunidade de analisar o orçamento que enviámos. Se tiver alguma dúvida ou quiser ajustar algum detalhe, estamos totalmente disponíveis!`
+            );
+
             return (
               <article
                 key={lead.id}
-                className="bg-white rounded-xl border border-[#E2E8F0] p-4 flex flex-col justify-between gap-3.5"
+                className={`bg-white rounded-xl border p-4 flex flex-col justify-between gap-3.5 ${
+                  followupPending ? 'border-[#F59E0B]' : 'border-[#E2E8F0]'
+                }`}
               >
                 <div className="space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
@@ -230,11 +289,26 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                         {LEAD_SOURCE_LABELS[lead.source]} · {formatDatePT(lead.created_at)}
                       </p>
                     </div>
-                    <StatusBadge
-                      tone={LEAD_STATUS_TONE[lead.status]}
-                      label={LEAD_STATUS_LABELS[lead.status]}
-                    />
+                    <div className="flex flex-col items-end gap-1.5 shrink-0">
+                      <StatusBadge
+                        tone={LEAD_STATUS_TONE[lead.status]}
+                        label={LEAD_STATUS_LABELS[lead.status]}
+                      />
+                      {followupPending && (
+                        <StatusBadge
+                          tone="warning"
+                          label="Follow-up pendente"
+                          icon={<BellRing className="w-3.5 h-3.5" />}
+                        />
+                      )}
+                    </div>
                   </div>
+
+                  {lead.status === 'QUOTE_SENT' && lead.next_followup_at && !followupPending && (
+                    <p className="text-[12px] text-[#0F766E] font-medium tabular-nums">
+                      Próximo acompanhamento agendado para {formatShortDatePT(lead.next_followup_at)}
+                    </p>
+                  )}
 
                   <div className="text-[15px] text-[#0F172A] space-y-1">
                     <p className="flex items-center gap-2">
@@ -340,6 +414,21 @@ export const LeadsTab: React.FC<LeadsTabProps> = ({
                           Criar Orçamento
                         </PrimaryButton>
                       </>
+                    )}
+
+                    {followupPending && (
+                      <div className="col-span-2">
+                        <a
+                          href={followupWhatsAppUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={() => logLeadFollowupSent(lead.id)}
+                          className="w-full min-h-12 px-4 rounded-[10px] bg-[#FEF3C7] hover:bg-[#FDE68A] border border-[#F59E0B] text-[#92400E] text-[15px] font-bold inline-flex items-center justify-center gap-2 transition-colors"
+                        >
+                          <MessageCircle className="w-5 h-5 shrink-0 text-[#B45309]" />
+                          <span>Enviar Lembrete WhatsApp (+3 dias)</span>
+                        </a>
+                      </div>
                     )}
 
                     {(lead.status === 'QUOTE_SENT' || lead.status === 'VISIT_SCHEDULED') && (

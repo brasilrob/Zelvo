@@ -55,9 +55,29 @@ export interface User {
   id: string;
   organization_id: string;
   full_name: string;
+  phone: string | null;
+  email: string | null;
   role: UserRole;
+  hourly_cost: number | null;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type TeamInvitationStatus = 'PENDING' | 'ACCEPTED' | 'EXPIRED' | 'REVOKED';
+
+export interface TeamInvitation {
+  id: string;
+  organization_id: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  role: UserRole;
+  hourly_cost: number | null;
+  token: string;
+  status: TeamInvitationStatus;
+  expires_at: string;
+  created_at: string;
 }
 
 export type LeadSource = 'WEB_FORM' | 'MANUAL' | 'WHATSAPP';
@@ -74,6 +94,7 @@ export interface Lead {
   source: LeadSource;
   status: LeadStatus;
   lost_reason: string | null;
+  next_followup_at?: string | null;
   photo_urls: string[];
   gdpr_consent: boolean;
   gdpr_consent_at: string | null;
@@ -93,6 +114,13 @@ export interface Client {
   billing_address: string | null;
   notes: string | null;
   is_anonymized: boolean;
+  is_retainer?: boolean;
+  retainer_amount?: number | null;
+  retainer_billing_day?: number | null;
+  referral_code?: string | null;
+  referral_discount_pct?: number;
+  referrals_count?: number;
+  referred_by_client_id?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -143,6 +171,19 @@ export interface QuoteItem {
   total: number;
 }
 
+export type RecurrenceBillingFrequency = 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'QUARTERLY';
+
+export interface QuotePackage {
+  id: string;
+  name: string;
+  description?: string | null;
+  recommended?: boolean;
+  items: QuoteItem[];
+  subtotal: number;
+  vat_total: number;
+  total: number;
+}
+
 export interface Quote {
   id: string;
   organization_id: string;
@@ -158,6 +199,16 @@ export interface Quote {
   valid_until: string | null;
   approved_at: string | null;
   approved_ip: string | null;
+  packages?: QuotePackage[];
+  selected_package_id?: string | null;
+  deposit_pct?: number | null;
+  deposit_paid?: boolean;
+  is_recurring?: boolean;
+  recurrence_frequency?: RecurrenceBillingFrequency | null;
+  next_billing_date?: string | null;
+  auto_invoice_active?: boolean;
+  generated_invoices_count?: number;
+  last_invoiced_at?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -170,6 +221,24 @@ export interface ChecklistItem {
   id: string;
   label: string;
   done: boolean;
+}
+
+export type DunningStage = 'NONE' | 'D0_SENT' | 'D3_REMINDER' | 'D7_CRITICAL';
+
+export interface JobExtraItem {
+  id: string;
+  name: string;
+  qty: number;
+  unit_price: number;
+  total: number;
+}
+
+export interface JobConsumedMaterial {
+  id: string;
+  inventory_item_id: string;
+  name: string;
+  qty: number;
+  unit: string;
 }
 
 export interface Job {
@@ -191,6 +260,12 @@ export interface Job {
   next_visit_notes: string | null;
   price: number;
   payment_status: PaymentStatus;
+  extras?: JobExtraItem[];
+  consumed_materials?: JobConsumedMaterial[];
+  signature_data_url?: string | null;
+  dunning_stage?: DunningStage;
+  dunning_paused?: boolean;
+  dunning_last_sent_at?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -229,6 +304,40 @@ export interface Transaction {
   receipt_path: string | null;
   external_payment_id: string | null;
   external_invoice_id: string | null;
+  atcud?: string | null;
+  invoice_issued_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface InventoryItem {
+  id: string;
+  organization_id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  min_stock: number;
+  unit_cost: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export type EquipmentStatus = 'OK' | 'MAINTENANCE_DUE' | 'IN_REPAIR';
+
+export interface EquipmentItem {
+  id: string;
+  organization_id: string;
+  name: string;
+  brand_model: string;
+  serial_or_plate: string | null;
+  hours_used: number;
+  next_service_hours: number | null;
+  next_service_date: string;
+  status: EquipmentStatus;
+  notes: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -238,6 +347,7 @@ export type EntityTableName =
   | 'vertical_templates'
   | 'organizations'
   | 'users'
+  | 'team_invitations'
   | 'leads'
   | 'clients'
   | 'service_assets'
@@ -245,7 +355,9 @@ export type EntityTableName =
   | 'quotes'
   | 'jobs'
   | 'job_media'
-  | 'transactions';
+  | 'transactions'
+  | 'inventory_items'
+  | 'equipment';
 
 export interface SyncQueueItem {
   id: string;
@@ -260,6 +372,7 @@ export interface ZelvoDatabase {
   vertical_templates: VerticalTemplate[];
   organizations: Organization[];
   users: User[];
+  team_invitations: TeamInvitation[];
   leads: Lead[];
   clients: Client[];
   service_assets: ServiceAsset[];
@@ -268,6 +381,8 @@ export interface ZelvoDatabase {
   jobs: Job[];
   job_media: JobMedia[];
   transactions: Transaction[];
+  inventory_items: InventoryItem[];
+  equipment: EquipmentItem[];
 }
 
 // Zod validation schemas for critical boundaries

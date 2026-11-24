@@ -117,12 +117,12 @@ export const SyncStatusBanner: React.FC<SyncStatusBannerProps> = ({
   }
 
   return (
-    <div className="bg-[#FEF3C7] text-[#92400E] border-b border-[#FDE68A] px-4 py-2 text-[14px] font-medium">
-      <div className="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-2">
+    <div className="bg-[#FEF3C7] text-[#92400E] border-b border-[#FDE68A] px-4 py-1.5 text-[13px] font-medium no-print">
+      <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <CloudOff className="w-4 h-4 shrink-0 text-[#B45309]" />
           <span className="truncate">
-            Modo Offline ·{' '}
+            Modo Offline •{' '}
             <strong className="tabular-nums">
               {pendingCount}{' '}
               {pendingCount === 1 ? 'alteração guardada' : 'alterações guardadas'}
@@ -133,10 +133,10 @@ export const SyncStatusBanner: React.FC<SyncStatusBannerProps> = ({
         <button
           type="button"
           onClick={onSyncNow}
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#B45309] text-white text-[13px] font-semibold hover:bg-[#92400E] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          className="inline-flex items-center gap-1.5 min-h-[34px] px-3 rounded-lg bg-[#92400E]/10 hover:bg-[#92400E]/20 text-[#92400E] border border-[#92400E]/20 text-[13px] font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span>Sincronizar Agora</span>
+          <span>Sincronizar</span>
         </button>
       </div>
     </div>

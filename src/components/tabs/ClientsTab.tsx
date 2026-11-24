@@ -4,16 +4,21 @@ import {
   ArrowLeft,
   Calendar,
   ChevronRight,
+  Copy,
   Edit3,
   Euro,
   FileText,
+  Gift,
   History,
   MapPin,
+  MessageCircle,
   Phone,
   Plus,
+  Repeat,
   Search,
   ShieldAlert,
   Trees,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import {
@@ -24,6 +29,8 @@ import {
   QUOTE_STATUS_LABELS,
 } from '../../i18n/pt-PT';
 import { useZelvo } from '../../store/ZelvoContext';
+import { buildWhatsAppUrl } from '../../utils/calculations';
+import { calculateClientProfitability } from '../../utils/profitability';
 import type {
   Client,
   CustomAttributeValue,
@@ -47,10 +54,15 @@ interface ClientsTabProps {
 export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
   const {
     db,
+    organization,
     activeVertical,
+    isTechnicianMode,
     createClient,
     anonymizeClient,
     upsertServiceAsset,
+    updateClientRetainer,
+    registerClientReferral,
+    showToast,
   } = useZelvo();
 
   const [query, setQuery] = useState('');
@@ -60,6 +72,12 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
   const [editingAsset, setEditingAsset] = useState<ServiceAsset | null>(null);
   const [assetModalOpen, setAssetModalOpen] = useState(false);
   const [gdprModalOpen, setGdprModalOpen] = useState(false);
+
+  // Retainer & Referral inline states
+  const [retainerAmount, setRetainerAmount] = useState('120');
+  const [retainerDay, setRetainerDay] = useState('5');
+  const [refNeighborName, setRefNeighborName] = useState('');
+  const [refNeighborPhone, setRefNeighborPhone] = useState('');
 
   const activeClients = useMemo(
     () =>
@@ -106,6 +124,18 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
     [activeClients, selectedClientId]
   );
 
+  React.useEffect(() => {
+    if (!selectedClient) return;
+    setRetainerAmount(
+      selectedClient.retainer_amount ? String(selectedClient.retainer_amount) : '120'
+    );
+    setRetainerDay(
+      selectedClient.retainer_billing_day ? String(selectedClient.retainer_billing_day) : '5'
+    );
+    setRefNeighborName('');
+    setRefNeighborPhone('');
+  }, [selectedClient?.id]);
+
   if (selectedClient) {
     const clientAssets = db.service_assets.filter(
       (a) => a.client_id === selectedClient.id && !a.deleted_at
@@ -126,22 +156,28 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
         date: j.scheduled_start,
         kind: 'Visita' as const,
         title: j.title,
-        subtitle: `${JOB_STATUS_LABELS[j.status]} · ${formatEUR(j.price)}`,
+        subtitle: isTechnicianMode
+          ? JOB_STATUS_LABELS[j.status]
+          : `${JOB_STATUS_LABELS[j.status]} · ${formatEUR(j.price)}`,
       })),
-      ...clientQuotes.map((q) => ({
-        id: `quote-${q.id}`,
-        date: q.created_at,
-        kind: 'Orçamento' as const,
-        title: `${q.quote_number} (${QUOTE_STATUS_LABELS[q.status]})`,
-        subtitle: `Total c/ IVA: ${formatEUR(q.total)}`,
-      })),
-      ...clientTransactions.map((t) => ({
-        id: `tx-${t.id}`,
-        date: `${t.transaction_date}T12:00:00.000Z`,
-        kind: 'Pagamento' as const,
-        title: t.description || 'Pagamento de Serviço',
-        subtitle: `+${formatEUR(t.amount)} · ${PAYMENT_METHOD_LABELS[t.payment_method]}`,
-      })),
+      ...(isTechnicianMode
+        ? []
+        : [
+            ...clientQuotes.map((q) => ({
+              id: `quote-${q.id}`,
+              date: q.created_at,
+              kind: 'Orçamento' as const,
+              title: `${q.quote_number} (${QUOTE_STATUS_LABELS[q.status]})`,
+              subtitle: `Total c/ IVA: ${formatEUR(q.total)}`,
+            })),
+            ...clientTransactions.map((t) => ({
+              id: `tx-${t.id}`,
+              date: `${t.transaction_date}T12:00:00.000Z`,
+              kind: 'Pagamento' as const,
+              title: t.description || 'Pagamento de Serviço',
+              subtitle: `+${formatEUR(t.amount)} · ${PAYMENT_METHOD_LABELS[t.payment_method]}`,
+            })),
+          ]),
     ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     return (
@@ -189,6 +225,58 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
               )}
             </div>
           )}
+
+          {/* Real Net Profit Breakdown (Admin only) */}
+          {!isTechnicianMode && (() => {
+            const usersById = new Map(db.users.map((u) => [u.id, u]));
+            const inventoryById = new Map(db.inventory_items.map((i) => [i.id, i]));
+            const prof = calculateClientProfitability({
+              client: selectedClient,
+              jobs: db.jobs,
+              transactions: db.transactions,
+              usersById,
+              inventoryById,
+            });
+            return (
+              <div className="rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[12px] font-semibold text-[#475569]">
+                      Lucro Líquido Real do Cliente
+                    </p>
+                    <p
+                      className={`font-display text-[22px] font-bold tabular-nums leading-tight ${
+                        prof.netProfit >= 0 ? 'text-[#15803D]' : 'text-[#B91C1C]'
+                      }`}
+                    >
+                      {prof.netProfit >= 0 ? '+' : ''}
+                      {formatEUR(prof.netProfit)}
+                    </p>
+                  </div>
+                  <StatusBadge
+                    tone={prof.marginPct >= 30 ? 'success' : prof.marginPct >= 0 ? 'info' : 'danger'}
+                    label={`Margem ${prof.marginPct.toFixed(1).replace('.', ',')}%`}
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-2 border-t border-[#E2E8F0] text-[12px] tabular-nums">
+                  <div>
+                    <p className="text-[#64748B]">Receita Recebida</p>
+                    <p className="font-bold text-[#15803D]">{formatEUR(prof.revenue)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[#64748B]">Insumos / Mat.</p>
+                    <p className="font-bold text-[#B91C1C]">-{formatEUR(prof.materialsCost)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[#64748B]">
+                      Mão-de-Obra{prof.trackedMinutes > 0 ? ` (${prof.trackedMinutes}m)` : ''}
+                    </p>
+                    <p className="font-bold text-[#B91C1C]">-{formatEUR(prof.laborCost)}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Segmented Detail Tabs */}
           <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100 border border-[#E2E8F0]">
@@ -331,8 +419,184 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
               </div>
             )}
 
+            {/* Phase 2: Monthly Retainer (Avença Mensal) Card */}
+            {!selectedClient.is_anonymized && !isTechnicianMode && (
+              <div className="bg-white border border-[#99F6E4] rounded-xl p-4 space-y-3 mt-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Repeat className="w-5 h-5 text-[#0F766E]" />
+                    <div>
+                      <h4 className="text-[15px] font-bold text-[#0F172A]">
+                        Avença Mensal (Assinatura Recorrente)
+                      </h4>
+                      <p className="text-[13px] text-[#475569]">
+                        Soma automaticamente ao MRR no painel financeiro.
+                      </p>
+                    </div>
+                  </div>
+                  <StatusBadge
+                    tone={selectedClient.is_retainer ? 'success' : 'neutral'}
+                    label={
+                      selectedClient.is_retainer
+                        ? `Ativa · ${formatEUR(selectedClient.retainer_amount ?? 0)}/mês`
+                        : 'Inativa'
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                  <div>
+                    <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                      Valor Fixo Mensal (€)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      step="0.01"
+                      value={retainerAmount}
+                      onChange={(e) => setRetainerAmount(e.target.value)}
+                      className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] text-[15px] font-bold tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                      Dia de Cobrança (1–28)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={retainerDay}
+                      onChange={(e) => setRetainerDay(e.target.value)}
+                      className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] text-[15px] font-bold tabular-nums"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <PrimaryButton
+                      type="button"
+                      fullWidth
+                      onClick={() =>
+                        updateClientRetainer(
+                          selectedClient.id,
+                          true,
+                          Math.max(1, Number(retainerAmount) || 0),
+                          Math.min(28, Math.max(1, Number(retainerDay) || 5))
+                        )
+                      }
+                      className="!min-h-11 !text-[14px]"
+                    >
+                      {selectedClient.is_retainer ? 'Atualizar Avença' : 'Ativar Avença'}
+                    </PrimaryButton>
+                    {selectedClient.is_retainer && (
+                      <button
+                        type="button"
+                        onClick={() => updateClientRetainer(selectedClient.id, false, null, null)}
+                        className="min-h-11 px-3 rounded-lg border border-[#CBD5E1] text-[13px] font-semibold text-[#B91C1C] hover:bg-red-50 cursor-pointer"
+                      >
+                        Desativar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Phase 3: "Traga um Vizinho" Referral Program Card */}
+            {!selectedClient.is_anonymized && !isTechnicianMode && (
+              <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Gift className="w-5 h-5 text-[#10B981]" />
+                    <div>
+                      <h4 className="text-[15px] font-bold text-[#0F172A]">
+                        Programa &ldquo;Traga um Vizinho&rdquo;
+                      </h4>
+                      <p className="text-[13px] text-[#475569]">
+                        Código único:{' '}
+                        <strong className="font-mono text-[#0F172A]">
+                          {selectedClient.referral_code ?? 'ZELVO15'}
+                        </strong>{' '}
+                        · Indicações: <strong>{selectedClient.referrals_count ?? 0}</strong>
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(selectedClient.referral_discount_pct ?? 0) > 0 && (
+                      <StatusBadge
+                        tone="success"
+                        label={`-${selectedClient.referral_discount_pct}% próx. visita`}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const code = selectedClient.referral_code ?? 'ZELVO15';
+                        try {
+                          await navigator.clipboard.writeText(code);
+                          showToast(`Código ${code} copiado.`, 'success');
+                        } catch {
+                          showToast(`Código: ${code}`, 'info');
+                        }
+                      }}
+                      className="min-h-10 px-2.5 rounded-lg border border-[#CBD5E1] text-[13px] font-semibold text-[#0F172A] inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copiar</span>
+                    </button>
+                    <a
+                      href={buildWhatsAppUrl(
+                        selectedClient.phone,
+                        `Olá ${selectedClient.name}! Partilhe o código ${selectedClient.referral_code ?? 'ZELVO15'} com um vizinho. Quando ele marcar com a ${organization.name}, ambos recebem 15% de desconto na próxima visita!`
+                      )}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="min-h-10 px-3 rounded-lg bg-[#10B981] hover:bg-[#059669] text-white text-[13px] font-semibold inline-flex items-center gap-1"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      <span>Partilhar</span>
+                    </a>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-[#E2E8F0]">
+                  <input
+                    type="text"
+                    value={refNeighborName}
+                    onChange={(e) => setRefNeighborName(e.target.value)}
+                    placeholder="Nome do vizinho indicado"
+                    className="min-h-11 px-3 rounded-lg border border-[#CBD5E1] text-[14px]"
+                  />
+                  <input
+                    type="tel"
+                    value={refNeighborPhone}
+                    onChange={(e) => setRefNeighborPhone(e.target.value)}
+                    placeholder="Telemóvel do vizinho"
+                    className="min-h-11 px-3 rounded-lg border border-[#CBD5E1] text-[14px] tabular-nums"
+                  />
+                  <PrimaryButton
+                    type="button"
+                    variant="secondary"
+                    icon={<UserPlus className="w-4 h-4 text-[#10B981]" />}
+                    onClick={() => {
+                      if (!refNeighborName.trim() || !refNeighborPhone.trim()) return;
+                      registerClientReferral(
+                        selectedClient.id,
+                        refNeighborName.trim(),
+                        refNeighborPhone.trim()
+                      );
+                      setRefNeighborName('');
+                      setRefNeighborPhone('');
+                    }}
+                    className="!min-h-11 !text-[13px]"
+                  >
+                    Registar (-15%)
+                  </PrimaryButton>
+                </div>
+              </div>
+            )}
+
             {/* GDPR Anonymization Zone */}
-            {!selectedClient.is_anonymized && (
+            {!selectedClient.is_anonymized && !isTechnicianMode && (
               <div className="bg-white border border-[#FECACA] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-4">
                 <div className="flex items-start gap-3">
                   <ShieldAlert className="w-5 h-5 text-[#DC2626] shrink-0 mt-0.5" />
@@ -520,7 +784,13 @@ export const ClientsTab: React.FC<ClientsTabProps> = ({ onScheduleVisit }) => {
                     {client.is_anonymized && (
                       <StatusBadge tone="danger" label="RGPD" />
                     )}
-                    {pending > 0 && (
+                    {client.is_retainer && !isTechnicianMode && (
+                      <StatusBadge
+                        tone="teal"
+                        label={`Avença ${formatEUR(client.retainer_amount ?? 0)}`}
+                      />
+                    )}
+                    {pending > 0 && !isTechnicianMode && (
                       <StatusBadge
                         tone="warning"
                         label={`Pendente ${formatEUR(pending)}`}

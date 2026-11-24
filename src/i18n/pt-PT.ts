@@ -82,8 +82,17 @@ export const SERVICE_UNIT_LABELS: Record<ServiceUnit, string> = {
 
 export const EXPENSE_CATEGORIES = [
   { id: 'FUEL', label: 'Combustível' },
-  { id: 'MATERIALS', label: 'Materiais e Insumos' },
-  { id: 'MAINTENANCE', label: 'Manutenção de Máquinas' },
+  { id: 'MATERIALS', label: 'Materiais' },
+  { id: 'LABOR', label: 'Mão-de-obra' },
+  { id: 'MAINTENANCE', label: 'Manutenção' },
+  { id: 'EQUIPMENT', label: 'Equipamento' },
+  { id: 'OTHER', label: 'Outros' },
+] as const;
+
+export const INVENTORY_CATEGORIES = [
+  { id: 'MATERIALS', label: 'Materiais' },
+  { id: 'FUEL', label: 'Combustível' },
+  { id: 'MAINTENANCE', label: 'Manutenção' },
   { id: 'EQUIPMENT', label: 'Equipamento' },
   { id: 'OTHER', label: 'Outros' },
 ] as const;
@@ -101,6 +110,16 @@ export const RECURRENCE_OPTIONS = [
   { value: 'FREQ=MONTHLY;INTERVAL=1', label: 'Mensal (próximos 90 dias)', shortLabel: 'Mensal' },
 ] as const;
 
+export const BILLING_FREQUENCY_LABELS: Record<
+  'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'QUARTERLY',
+  string
+> = {
+  WEEKLY: 'Semanal',
+  BIWEEKLY: 'Quinzenal',
+  MONTHLY: 'Mensal',
+  QUARTERLY: 'Trimestral',
+};
+
 export function getRecurrenceShortLabel(rule: string | null): string | null {
   if (!rule) return null;
   const match = RECURRENCE_OPTIONS.find((opt) => opt.value === rule);
@@ -112,8 +131,12 @@ export function getRecurrenceShortLabel(rule: string | null): string | null {
 }
 
 export function getCategoryLabel(category: string): string {
-  const all = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES];
-  return all.find((c) => c.id === category)?.label ?? category;
+  const normalized = category.trim().toUpperCase();
+  const all = [...EXPENSE_CATEGORIES, ...INVENTORY_CATEGORIES, ...INCOME_CATEGORIES];
+  const exact = all.find((c) => c.id === normalized);
+  if (exact) return exact.label;
+  if (normalized === 'INSUMOS') return 'Materiais';
+  return category;
 }
 
 const eurFormatter = new Intl.NumberFormat('pt-PT', {
@@ -152,6 +175,11 @@ export function formatMonthYearPT(date: Date): string {
   return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
+export function formatDateTimePT(isoOrDate: string | Date): string {
+  const d = typeof isoOrDate === 'string' ? parseISO(isoOrDate) : isoOrDate;
+  return format(d, "dd/MM/yyyy 'às' HH:mm", { locale: pt });
+}
+
 export function formatElapsedTimer(totalSeconds: number): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
   const hrs = Math.floor(safe / 3600);
@@ -159,3 +187,59 @@ export function formatElapsedTimer(totalSeconds: number): string {
   const secs = safe % 60;
   return [hrs, mins, secs].map((v) => String(v).padStart(2, '0')).join(':');
 }
+
+export const DUNNING_STAGE_LABELS = {
+  NONE: 'Por enviar',
+  D0_SENT: 'D-0 · Link enviado',
+  D3_REMINDER: 'D+3 · Lembrete cordial',
+  D7_CRITICAL: 'D+7 · Alerta crítico',
+} as const;
+
+export const SAAS_PLANS = [
+  {
+    id: 'PILOT' as const,
+    name: 'Piloto Gratuito',
+    priceLabel: '0 €/mês',
+    maxUsers: 1,
+    maxClients: 15,
+    description: 'Ideal para testar no terreno com gestão básica de agenda e orçamentos.',
+  },
+  {
+    id: 'SOLO' as const,
+    name: 'Solo',
+    priceLabel: '19 €/mês',
+    maxUsers: 1,
+    maxClients: 150,
+    description: 'Clientes ilimitados, cobranças MB WAY/Multibanco, faturação AT e projeções.',
+  },
+  {
+    id: 'TEAM' as const,
+    name: 'Equipa',
+    priceLabel: '39 €/mês',
+    maxUsers: 5,
+    maxClients: 500,
+    description: 'Até 5 técnicos, rotas otimizadas, stock & máquinas e campanhas de marketing.',
+  },
+] as const;
+
+export const SEASONAL_CAMPAIGN_TEMPLATES = [
+  {
+    id: 'spring_prep',
+    title: 'Preparação de Primavera',
+    message:
+      'Olá {nome}! A primavera está a chegar e é a altura ideal para adubação, revisão da rega e primeiro corte do jardim. Temos vagas esta semana em Braga — quer reservar uma visita?',
+  },
+  {
+    id: 'autumn_pruning',
+    title: 'Poda de Outono & Folhas',
+    message:
+      'Olá {nome}! Com o outono, recomendamos a poda de formação de sebes e limpeza de folhas secas para proteger o relvado antes das chuvas. Podemos agendar para a próxima semana?',
+  },
+  {
+    id: 'land_clearing',
+    title: 'Limpeza de Terreno (Prevenção)',
+    message:
+      'Olá {nome}! Já iniciámos as marcações de limpeza e desmatação de terrenos em conformidade com as normas municipais. Quer receber um orçamento atualizado sem compromisso?',
+  },
+] as const;
+

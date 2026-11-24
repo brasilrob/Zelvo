@@ -1,17 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { addDays, format } from 'date-fns';
 import {
+  CalendarClock,
   CheckCircle2,
+  Download,
   Edit3,
   ExternalLink,
   FileText,
   MessageCircle,
   Package,
+  PauseCircle,
+  PlayCircle,
   Plus,
   Printer,
+  Repeat,
+  Sparkles,
   Trash2,
+  Zap,
 } from 'lucide-react';
 import {
+  BILLING_FREQUENCY_LABELS,
   formatEUR,
   formatShortDatePT,
   QUOTE_STATUS_LABELS,
@@ -21,6 +29,8 @@ import { useZelvo } from '../../store/ZelvoContext';
 import type {
   Quote,
   QuoteItem,
+  QuotePackage,
+  RecurrenceBillingFrequency,
   ServiceCatalogItem,
   ServiceUnit,
 } from '../../types/database';
@@ -30,6 +40,7 @@ import {
   generateId,
   isQuoteExpired,
 } from '../../utils/calculations';
+import { exportGeneratedInvoicePDF } from '../../utils/financeExport';
 import { QuotePrintModal } from '../common/QuotePrintModal';
 import {
   EmptyState,
@@ -61,15 +72,20 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
   const {
     db,
     organization,
+    isTechnicianMode,
     upsertCatalogItem,
     softDeleteCatalogItem,
     createQuote,
     updateQuoteStatus,
+    configureQuoteRecurrence,
+    toggleQuoteAutoInvoice,
+    generateAutoInvoiceFromQuote,
     showToast,
   } = useZelvo();
 
-  const [subTab, setSubTab] = useState<'quotes' | 'catalog'>('quotes');
+  const [subTab, setSubTab] = useState<'quotes' | 'recurring' | 'catalog'>('quotes');
   const [quoteBuilderOpen, setQuoteBuilderOpen] = useState(false);
+  const [builderDefaultRecurring, setBuilderDefaultRecurring] = useState(false);
   const [catalogModalOpen, setCatalogModalOpen] = useState(false);
   const [editingCatalog, setEditingCatalog] = useState<ServiceCatalogItem | null>(null);
   const [printQuote, setPrintQuote] = useState<Quote | null>(null);
@@ -77,6 +93,7 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
   useEffect(() => {
     if (preselectedLeadId) {
       setSubTab('quotes');
+      setBuilderDefaultRecurring(false);
       setQuoteBuilderOpen(true);
     }
   }, [preselectedLeadId]);
@@ -91,6 +108,31 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
     [db.quotes]
   );
 
+  const recurringQuotes = useMemo(
+    () =>
+      activeQuotes
+        .filter((q) => q.is_recurring)
+        .sort((a, b) => {
+          const da = a.next_billing_date ?? '9999-12-31';
+          const dbDate = b.next_billing_date ?? '9999-12-31';
+          return da.localeCompare(dbDate);
+        }),
+    [activeQuotes]
+  );
+
+  const todayIsoDate = format(new Date(), 'yyyy-MM-dd');
+
+  const dueRecurringQuotes = useMemo(
+    () =>
+      recurringQuotes.filter(
+        (q) =>
+          q.auto_invoice_active &&
+          Boolean(q.next_billing_date) &&
+          (q.next_billing_date as string) <= todayIsoDate
+      ),
+    [recurringQuotes, todayIsoDate]
+  );
+
   const activeCatalog = useMemo(
     () =>
       db.service_catalog
@@ -101,6 +143,50 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
 
   const clientsById = useMemo(() => new Map(db.clients.map((c) => [c.id, c])), [db.clients]);
   const leadsById = useMemo(() => new Map(db.leads.map((l) => [l.id, l])), [db.leads]);
+
+  const handleGenerateSingleInvoice = (quoteId: string) => {
+    const result = generateAutoInvoiceFromQuote(quoteId);
+    if (!result) return;
+    const client = result.quote.client_id
+      ? clientsById.get(result.quote.client_id) ?? null
+      : null;
+    exportGeneratedInvoicePDF({
+      invoiceNumber: result.invoiceNumber,
+      issueDate: result.issueDate,
+      quote: result.quote,
+      organization,
+      client,
+    });
+  };
+
+  const handleProcessAllDueInvoices = () => {
+    if (dueRecurringQuotes.length === 0) return;
+    let generated = 0;
+    for (const q of dueRecurringQuotes) {
+      const result = generateAutoInvoiceFromQuote(q.id);
+      if (result) {
+        generated += 1;
+        const client = result.quote.client_id
+          ? clientsById.get(result.quote.client_id) ?? null
+          : null;
+        exportGeneratedInvoicePDF({
+          invoiceNumber: result.invoiceNumber,
+          issueDate: result.issueDate,
+          quote: result.quote,
+          organization,
+          client,
+        });
+      }
+    }
+    if (generated > 0) {
+      showToast(
+        `${generated} ${
+          generated === 1 ? 'fatura automática gerada' : 'faturas automáticas geradas'
+        } e registadas nas Finanças.`,
+        'success'
+      );
+    }
+  };
 
   const handleSendWhatsApp = (quote: Quote) => {
     const client = quote.client_id ? clientsById.get(quote.client_id) : null;
@@ -133,7 +219,7 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
       {/* Sub-navigation + Primary CTA */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div
-          className="inline-flex items-center p-1 rounded-xl bg-slate-200/80 border border-[#CBD5E1]"
+          className="inline-flex items-center p-1 rounded-xl bg-slate-200/80 border border-[#CBD5E1] overflow-x-auto max-w-full"
           role="tablist"
         >
           <button
@@ -141,7 +227,7 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
             role="tab"
             aria-selected={subTab === 'quotes'}
             onClick={() => setSubTab('quotes')}
-            className={`min-h-[42px] px-4 rounded-lg text-[15px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`min-h-[42px] px-3.5 rounded-lg text-[14px] sm:text-[15px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
               subTab === 'quotes'
                 ? 'bg-white text-[#0F172A] shadow-xs'
                 : 'text-[#475569] hover:text-[#0F172A]'
@@ -152,9 +238,25 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
           <button
             type="button"
             role="tab"
+            aria-selected={subTab === 'recurring'}
+            onClick={() => setSubTab('recurring')}
+            className={`min-h-[42px] px-3.5 rounded-lg text-[14px] sm:text-[15px] font-semibold transition-colors whitespace-nowrap inline-flex items-center gap-1.5 cursor-pointer ${
+              subTab === 'recurring'
+                ? 'bg-white text-[#0F172A] shadow-xs'
+                : 'text-[#475569] hover:text-[#0F172A]'
+            }`}
+          >
+            <Repeat className="w-4 h-4 text-[#0F766E]" />
+            <span>
+              Recorrentes (<span className="tabular-nums">{recurringQuotes.length}</span>)
+            </span>
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={subTab === 'catalog'}
             onClick={() => setSubTab('catalog')}
-            className={`min-h-[42px] px-4 rounded-lg text-[15px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`min-h-[42px] px-3.5 rounded-lg text-[14px] sm:text-[15px] font-semibold transition-colors whitespace-nowrap cursor-pointer ${
               subTab === 'catalog'
                 ? 'bg-white text-[#0F172A] shadow-xs'
                 : 'text-[#475569] hover:text-[#0F172A]'
@@ -166,10 +268,23 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
 
         {subTab === 'quotes' ? (
           <PrimaryButton
-            onClick={() => setQuoteBuilderOpen(true)}
+            onClick={() => {
+              setBuilderDefaultRecurring(false);
+              setQuoteBuilderOpen(true);
+            }}
             icon={<Plus className="w-5 h-5" />}
           >
             Novo Orçamento
+          </PrimaryButton>
+        ) : subTab === 'recurring' ? (
+          <PrimaryButton
+            onClick={() => {
+              setBuilderDefaultRecurring(true);
+              setQuoteBuilderOpen(true);
+            }}
+            icon={<Repeat className="w-5 h-5" />}
+          >
+            Novo Contrato Recorrente
           </PrimaryButton>
         ) : (
           <PrimaryButton
@@ -219,10 +334,35 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
                             {recipientName}
                           </h3>
                         </div>
-                        <StatusBadge
-                          tone={expired ? 'warning' : QUOTE_STATUS_TONE[quote.status]}
-                          label={expired ? 'Expirado' : QUOTE_STATUS_LABELS[quote.status]}
-                        />
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          {quote.packages && quote.packages.length > 0 && (
+                            <StatusBadge
+                              tone="info"
+                              label={`${quote.packages.length} Pacotes`}
+                              icon={<Sparkles className="w-3 h-3" />}
+                            />
+                          )}
+                          {quote.deposit_pct && quote.deposit_pct > 0 && (
+                            <StatusBadge
+                              tone={quote.deposit_paid ? 'success' : 'teal'}
+                              label={
+                                quote.deposit_paid
+                                  ? `Sinal ${quote.deposit_pct}% Pago`
+                                  : `Sinal ${quote.deposit_pct}%`
+                              }
+                            />
+                          )}
+                          {quote.is_recurring && quote.recurrence_frequency && (
+                            <StatusBadge
+                              tone="teal"
+                              label={`Recorrente · ${BILLING_FREQUENCY_LABELS[quote.recurrence_frequency]}`}
+                            />
+                          )}
+                          <StatusBadge
+                            tone={expired ? 'warning' : QUOTE_STATUS_TONE[quote.status]}
+                            label={expired ? 'Expirado' : QUOTE_STATUS_LABELS[quote.status]}
+                          />
+                        </div>
                       </div>
 
                       <div className="text-[14px] text-[#475569] space-y-1">
@@ -244,15 +384,17 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
                         )}
                       </div>
 
-                      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-3.5 py-2.5 flex items-center justify-between">
-                        <div className="text-[13px] text-[#475569] tabular-nums">
-                          Subtotal {formatEUR(quote.subtotal)} + IVA{' '}
-                          {formatEUR(quote.vat_total)}
+                      {!isTechnicianMode && (
+                        <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-3.5 py-2.5 flex items-center justify-between">
+                          <div className="text-[13px] text-[#475569] tabular-nums">
+                            Subtotal {formatEUR(quote.subtotal)} + IVA{' '}
+                            {formatEUR(quote.vat_total)}
+                          </div>
+                          <div className="text-[18px] font-bold text-[#0F172A] tabular-nums">
+                            {formatEUR(quote.total)}
+                          </div>
                         </div>
-                        <div className="text-[18px] font-bold text-[#0F172A] tabular-nums">
-                          {formatEUR(quote.total)}
-                        </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="space-y-2 pt-1">
@@ -271,6 +413,20 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
                           WhatsApp
                         </PrimaryButton>
                       </div>
+
+                      {quote.status === 'APPROVED' && quote.client_id && !quote.is_recurring && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            configureQuoteRecurrence(quote.id, 'MONTHLY', todayIsoDate);
+                            setSubTab('recurring');
+                          }}
+                          className="w-full min-h-[44px] px-3 rounded-lg border border-[#14B8A6] bg-[#CCFBF1]/45 text-[14px] font-semibold text-[#0F766E] hover:bg-[#CCFBF1]/80 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Repeat className="w-4 h-4" />
+                          <span>Ativar Faturação Recorrente (Mensal)</span>
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -292,6 +448,180 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
             </div>
           )}
         </>
+      )}
+
+      {/* Recurring Maintenance Contracts & Auto-Invoicing */}
+      {subTab === 'recurring' && (
+        <div className="space-y-4">
+          {/* Due Invoices Batch Banner */}
+          {dueRecurringQuotes.length > 0 && (
+            <div className="bg-[#FEF3C7] border border-[#F59E0B] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-lg bg-[#F59E0B]/20 text-[#B45309] flex items-center justify-center shrink-0">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-[16px] font-bold text-[#92400E]">
+                    {dueRecurringQuotes.length}{' '}
+                    {dueRecurringQuotes.length === 1
+                      ? 'contrato pronto a faturar hoje'
+                      : 'contratos prontos a faturar hoje'}
+                  </h3>
+                  <p className="text-[14px] text-[#92400E]/90">
+                    Gere automaticamente as faturas PDF com base no catálogo e registe as receitas
+                    nas Finanças.
+                  </p>
+                </div>
+              </div>
+              <PrimaryButton
+                onClick={handleProcessAllDueInvoices}
+                icon={<Zap className="w-4 h-4" />}
+              >
+                Processar Faturas Devidas ({dueRecurringQuotes.length})
+              </PrimaryButton>
+            </div>
+          )}
+
+          {recurringQuotes.length === 0 ? (
+            <EmptyState
+              icon={<Repeat className="w-6 h-6" />}
+              title="Sem contratos recorrentes ativos"
+              description="Configure orçamentos recorrentes para clientes com manutenção periódica e gere faturas automáticas com um clique."
+              actionLabel="+ Novo Contrato Recorrente"
+              onAction={() => {
+                setBuilderDefaultRecurring(true);
+                setQuoteBuilderOpen(true);
+              }}
+            />
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {recurringQuotes.map((quote) => {
+                const client = quote.client_id ? clientsById.get(quote.client_id) : null;
+                const lead = quote.lead_id ? leadsById.get(quote.lead_id) : null;
+                const recipientName = client?.name ?? lead?.name ?? 'Cliente Contratual';
+                const freq = quote.recurrence_frequency ?? 'MONTHLY';
+                const isActive = Boolean(quote.auto_invoice_active);
+                const isDue =
+                  isActive &&
+                  Boolean(quote.next_billing_date) &&
+                  (quote.next_billing_date as string) <= todayIsoDate;
+
+                return (
+                  <article
+                    key={quote.id}
+                    className={`bg-white border border-[#E2E8F0] border-l-4 ${
+                      isDue
+                        ? 'border-l-[#F59E0B]'
+                        : isActive
+                        ? 'border-l-[#10B981]'
+                        : 'border-l-[#94A3B8]'
+                    } rounded-xl p-4 flex flex-col justify-between gap-3.5`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[13px] font-bold text-[#0F766E] tabular-nums">
+                            {quote.quote_number} · {BILLING_FREQUENCY_LABELS[freq]}
+                          </p>
+                          <h3 className="text-[18px] font-bold text-[#0F172A]">
+                            {recipientName}
+                          </h3>
+                        </div>
+                        <StatusBadge
+                          tone={isDue ? 'warning' : isActive ? 'success' : 'neutral'}
+                          label={
+                            isDue
+                              ? 'Fatura Devida'
+                              : isActive
+                              ? 'Contrato Ativo'
+                              : 'Em Pausa'
+                          }
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[13px]">
+                        <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                          <p className="text-[#475569] flex items-center gap-1">
+                            <CalendarClock className="w-3.5 h-3.5 shrink-0" />
+                            <span>Próxima Fatura</span>
+                          </p>
+                          <p
+                            className={`font-bold mt-0.5 tabular-nums ${
+                              isDue ? 'text-[#B45309]' : 'text-[#0F172A]'
+                            }`}
+                          >
+                            {quote.next_billing_date
+                              ? formatShortDatePT(quote.next_billing_date)
+                              : 'Por definir'}
+                          </p>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0]">
+                          <p className="text-[#475569]">Faturas Emitidas</p>
+                          <p className="font-bold text-[#0F172A] mt-0.5 tabular-nums">
+                            {quote.generated_invoices_count ?? 0}{' '}
+                            {(quote.generated_invoices_count ?? 0) === 1 ? 'fatura' : 'faturas'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="text-[13px] text-[#475569] space-y-1">
+                        <p className="font-semibold text-[#0F172A]">
+                          Serviços incluídos ({quote.items.length}):
+                        </p>
+                        <ul className="space-y-0.5">
+                          {quote.items.slice(0, 3).map((item) => (
+                            <li
+                              key={item.id}
+                              className="flex items-center justify-between gap-2 tabular-nums"
+                            >
+                              <span className="truncate">
+                                • {item.qty}× {item.name}
+                              </span>
+                              <span className="font-medium text-[#0F172A] shrink-0">
+                                {formatEUR(item.total)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-3.5 py-2.5 flex items-center justify-between">
+                        <span className="text-[13px] font-medium text-[#475569]">
+                          Valor por ciclo (c/ IVA)
+                        </span>
+                        <span className="text-[18px] font-bold text-[#0F172A] tabular-nums">
+                          {formatEUR(quote.total)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      <PrimaryButton
+                        variant="secondary"
+                        onClick={() => toggleQuoteAutoInvoice(quote.id, !isActive)}
+                        icon={
+                          isActive ? (
+                            <PauseCircle className="w-4 h-4" />
+                          ) : (
+                            <PlayCircle className="w-4 h-4" />
+                          )
+                        }
+                      >
+                        {isActive ? 'Pausar Ciclo' : 'Reativar Ciclo'}
+                      </PrimaryButton>
+                      <PrimaryButton
+                        onClick={() => handleGenerateSingleInvoice(quote.id)}
+                        icon={<Download className="w-4 h-4" />}
+                      >
+                        Gerar Fatura + PDF
+                      </PrimaryButton>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Service Catalog List */}
@@ -361,13 +691,19 @@ export const QuotesTab: React.FC<QuotesTabProps> = ({
         open={quoteBuilderOpen}
         onClose={() => {
           setQuoteBuilderOpen(false);
+          setBuilderDefaultRecurring(false);
           onClearPreselectedLead?.();
         }}
         initialLeadId={preselectedLeadId}
+        defaultRecurring={builderDefaultRecurring}
         catalog={activeCatalog}
         onSave={(payload) => {
           createQuote(payload);
           setQuoteBuilderOpen(false);
+          setBuilderDefaultRecurring(false);
+          if (payload.is_recurring) {
+            setSubTab('recurring');
+          }
           onClearPreselectedLead?.();
         }}
       />
@@ -565,18 +901,26 @@ const CatalogItemModal: React.FC<CatalogItemModalProps> = ({
   );
 };
 
-/* --- Quote Builder Modal (TC-07 exact VAT calculation) --- */
+/* --- Quote Builder Modal (TC-07 exact VAT + Multi-Package + 30% Deposit + Recurring) --- */
 interface QuoteBuilderModalProps {
   open: boolean;
   onClose: () => void;
   initialLeadId?: string | null;
+  defaultRecurring?: boolean;
   catalog: ServiceCatalogItem[];
   onSave: (payload: {
     lead_id?: string | null;
     client_id?: string | null;
     items: Array<Omit<QuoteItem, 'total'>>;
     valid_until: string | null;
-    status: 'DRAFT' | 'SENT';
+    status: 'DRAFT' | 'SENT' | 'APPROVED';
+    packages?: QuotePackage[];
+    selected_package_id?: string | null;
+    deposit_pct?: number | null;
+    is_recurring?: boolean;
+    recurrence_frequency?: RecurrenceBillingFrequency | null;
+    next_billing_date?: string | null;
+    auto_invoice_active?: boolean;
   }) => void;
 }
 
@@ -584,6 +928,7 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
   open,
   onClose,
   initialLeadId,
+  defaultRecurring = false,
   catalog,
   onSave,
 }) => {
@@ -594,6 +939,18 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
   const [validUntil, setValidUntil] = useState(() =>
     format(addDays(new Date(), 15), 'yyyy-MM-dd')
   );
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrenceFrequency, setRecurrenceFrequency] =
+    useState<RecurrenceBillingFrequency>('MONTHLY');
+  const [nextBillingDate, setNextBillingDate] = useState(() =>
+    format(new Date(), 'yyyy-MM-dd')
+  );
+  const [enablePackages, setEnablePackages] = useState(false);
+  const [basePkgName, setBasePkgName] = useState('Manutenção Base');
+  const [plusPkgName, setPlusPkgName] = useState('Manutenção + Adubação Premium');
+  const [plusExtraName, setPlusExtraName] = useState('Adubação Orgânica + Revisão de Rega');
+  const [plusExtraPrice, setPlusExtraPrice] = useState('65');
+  const [requireDeposit, setRequireDeposit] = useState(false);
   const [items, setItems] = useState<Array<Omit<QuoteItem, 'total'>>>([]);
   const [error, setError] = useState('');
 
@@ -608,7 +965,10 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
 
   useEffect(() => {
     if (!open) return;
-    if (initialLeadId) {
+    if (defaultRecurring && availableClients.length > 0) {
+      setTargetType('client');
+      setSelectedClientId(availableClients[0].id);
+    } else if (initialLeadId) {
       setTargetType('lead');
       setSelectedLeadId(initialLeadId);
     } else if (availableLeads.length > 0) {
@@ -618,7 +978,15 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
       setTargetType('client');
       setSelectedClientId(availableClients[0].id);
     }
+    if (availableClients.length > 0 && !selectedClientId) {
+      setSelectedClientId(availableClients[0].id);
+    }
     setValidUntil(format(addDays(new Date(), 15), 'yyyy-MM-dd'));
+    setIsRecurring(defaultRecurring);
+    setRecurrenceFrequency('MONTHLY');
+    setNextBillingDate(format(new Date(), 'yyyy-MM-dd'));
+    setEnablePackages(false);
+    setRequireDeposit(false);
     setItems(
       catalog[0]
         ? [
@@ -643,7 +1011,7 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
           ]
     );
     setError('');
-  }, [availableClients, availableLeads, catalog, initialLeadId, open]);
+  }, [availableClients, availableLeads, catalog, defaultRecurring, initialLeadId, open]);
 
   const totals = useMemo(() => calculateQuoteTotals(items), [items]);
 
@@ -685,17 +1053,72 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
     setItems((prev) => prev.filter((it) => it.id !== id));
   };
 
-  const handleSave = (status: 'DRAFT' | 'SENT') => {
+  const handleSave = (status: 'DRAFT' | 'SENT' | 'APPROVED') => {
     if (items.length === 0 || items.some((it) => !it.name.trim() || it.qty <= 0)) {
       setError('Adicione pelo menos um serviço com descrição e quantidade válida.');
       return;
     }
+    if (isRecurring && targetType === 'client' && !selectedClientId) {
+      setError('Selecione um cliente para ativar o contrato recorrente.');
+      return;
+    }
+
+    let builtPackages: QuotePackage[] | undefined;
+    let selectedPkgId: string | null = null;
+    if (enablePackages) {
+      const baseCalc = calculateQuoteTotals(items);
+      const plusItems = [
+        ...items,
+        {
+          id: generateId('qi'),
+          name: plusExtraName.trim() || 'Tratamento Adicional Premium',
+          unit: 'FIXED' as const,
+          qty: 1,
+          unit_price: Math.max(0, Number(plusExtraPrice) || 0),
+          vat_rate: 23,
+        },
+      ];
+      const plusCalc = calculateQuoteTotals(plusItems);
+      const baseId = generateId('pkg');
+      const plusId = generateId('pkg');
+      builtPackages = [
+        {
+          id: baseId,
+          name: basePkgName.trim() || 'Opção Base',
+          description: 'Serviços essenciais incluídos nesta proposta.',
+          recommended: false,
+          items: baseCalc.items,
+          subtotal: baseCalc.subtotal,
+          vat_total: baseCalc.vat_total,
+          total: baseCalc.total,
+        },
+        {
+          id: plusId,
+          name: plusPkgName.trim() || 'Opção Completa',
+          description: `Inclui tudo da opção base + ${plusExtraName.trim() || 'extra premium'}.`,
+          recommended: true,
+          items: plusCalc.items,
+          subtotal: plusCalc.subtotal,
+          vat_total: plusCalc.vat_total,
+          total: plusCalc.total,
+        },
+      ];
+      selectedPkgId = plusId;
+    }
+
     onSave({
       lead_id: targetType === 'lead' ? selectedLeadId || null : null,
       client_id: targetType === 'client' ? selectedClientId || null : null,
       items,
       valid_until: validUntil || null,
       status,
+      packages: builtPackages,
+      selected_package_id: selectedPkgId,
+      deposit_pct: requireDeposit ? 30 : null,
+      is_recurring: isRecurring,
+      recurrence_frequency: isRecurring ? recurrenceFrequency : null,
+      next_billing_date: isRecurring ? nextBillingDate : null,
+      auto_invoice_active: isRecurring && status === 'APPROVED',
     });
   };
 
@@ -703,7 +1126,7 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
     <Modal
       open={open}
       onClose={onClose}
-      title="Criar Orçamento"
+      title={isRecurring ? 'Novo Contrato Recorrente' : 'Criar Orçamento'}
       subtitle="Cálculo automático de Subtotal, IVA (23%, 13%, 6%, 0%) e Total"
       size="lg"
     >
@@ -901,6 +1324,161 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
           ))}
         </div>
 
+        {/* Phase 3: Multi-Package Options & 30% Deposit */}
+        <div className="p-3.5 rounded-xl border border-[#CBD5E1] bg-[#F8FAFC] space-y-3">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enablePackages}
+              onChange={(e) => setEnablePackages(e.target.checked)}
+              className="w-5 h-5 mt-0.5 accent-[#10B981] shrink-0"
+            />
+            <div>
+              <span className="text-[15px] font-bold text-[#0F172A] flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-[#10B981]" />
+                <span>Apresentar Múltiplos Pacotes (Base vs. Premium)</span>
+              </span>
+              <p className="text-[13px] text-[#475569]">
+                O cliente escolhe a opção pretendida diretamente no portal /q/[token].
+              </p>
+            </div>
+          </label>
+
+          {enablePackages && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+              <div>
+                <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                  Nome Pacote 1 (Base)
+                </label>
+                <input
+                  type="text"
+                  value={basePkgName}
+                  onChange={(e) => setBasePkgName(e.target.value)}
+                  className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] bg-white text-[14px]"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                  Nome Pacote 2 (Recomendado)
+                </label>
+                <input
+                  type="text"
+                  value={plusPkgName}
+                  onChange={(e) => setPlusPkgName(e.target.value)}
+                  className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] bg-white text-[14px]"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                  Serviço Adicional do Pacote 2
+                </label>
+                <input
+                  type="text"
+                  value={plusExtraName}
+                  onChange={(e) => setPlusExtraName(e.target.value)}
+                  className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] bg-white text-[14px]"
+                />
+              </div>
+              <div>
+                <label className="block text-[12px] font-semibold text-[#475569] mb-1">
+                  Valor Extra Pacote 2 (€ s/ IVA)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={plusExtraPrice}
+                  onChange={(e) => setPlusExtraPrice(e.target.value)}
+                  className="w-full min-h-11 px-3 rounded-lg border border-[#CBD5E1] bg-white text-[14px] tabular-nums"
+                />
+              </div>
+            </div>
+          )}
+
+          <label className="flex items-start gap-2.5 pt-2 border-t border-[#E2E8F0] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={requireDeposit}
+              onChange={(e) => setRequireDeposit(e.target.checked)}
+              className="w-5 h-5 mt-0.5 accent-[#10B981] shrink-0"
+            />
+            <div>
+              <span className="text-[14px] font-bold text-[#0F172A]">
+                Exigir Sinal de 30% (MB WAY / Multibanco) para confirmar adjudicação
+              </span>
+              <p className="text-[12px] text-[#475569]">
+                Ativa o pagamento de sinal diretamente no ecrã público de aprovação.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {/* Recurring Contract & Automatic Invoicing Configuration */}
+        <div className="p-3.5 rounded-xl border border-[#14B8A6]/60 bg-[#CCFBF1]/25 space-y-3">
+          <label className="flex items-start gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isRecurring}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setIsRecurring(checked);
+                if (checked && availableClients.length > 0) {
+                  setTargetType('client');
+                  if (!selectedClientId) {
+                    setSelectedClientId(availableClients[0].id);
+                  }
+                }
+              }}
+              className="w-5 h-5 mt-0.5 accent-[#0F766E] shrink-0"
+            />
+            <div>
+              <span className="text-[15px] font-bold text-[#0F172A] flex items-center gap-1.5">
+                <Repeat className="w-4 h-4 text-[#0F766E]" />
+                <span>Contrato de Manutenção Recorrente (Faturação Automática)</span>
+              </span>
+              <p className="text-[13px] text-[#475569] mt-0.5">
+                Gera faturas automáticas em PDF com base nos serviços do catálogo selecionados.
+              </p>
+            </div>
+          </label>
+
+          {isRecurring && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block text-[13px] font-semibold text-[#0F172A] mb-1">
+                  Periodicidade de Faturação
+                </label>
+                <select
+                  value={recurrenceFrequency}
+                  onChange={(e) =>
+                    setRecurrenceFrequency(e.target.value as RecurrenceBillingFrequency)
+                  }
+                  className="w-full min-h-12 px-3 rounded-[10px] border border-[#CBD5E1] bg-white text-[15px]"
+                >
+                  {(Object.keys(BILLING_FREQUENCY_LABELS) as RecurrenceBillingFrequency[]).map(
+                    (freq) => (
+                      <option key={freq} value={freq}>
+                        {BILLING_FREQUENCY_LABELS[freq]}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[13px] font-semibold text-[#0F172A] mb-1">
+                  Próxima Data de Faturação
+                </label>
+                <input
+                  type="date"
+                  value={nextBillingDate}
+                  onChange={(e) => setNextBillingDate(e.target.value)}
+                  className="w-full min-h-12 px-3 rounded-[10px] border border-[#CBD5E1] bg-white text-[15px] tabular-nums"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Live Totals Box */}
         <div className="bg-[#1E293B] text-white rounded-xl p-4 space-y-1.5 tabular-nums">
           <div className="flex justify-between text-[14px] text-slate-300">
@@ -919,18 +1497,37 @@ const QuoteBuilderModal: React.FC<QuoteBuilderModalProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-          <PrimaryButton
-            variant="secondary"
-            fullWidth
-            onClick={() => handleSave('DRAFT')}
-          >
-            Guardar Rascunho
-          </PrimaryButton>
-          <PrimaryButton fullWidth onClick={() => handleSave('SENT')}>
-            Guardar e Marcar Enviado
-          </PrimaryButton>
-        </div>
+        {isRecurring ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+            <PrimaryButton
+              variant="secondary"
+              fullWidth
+              onClick={() => handleSave('SENT')}
+            >
+              Guardar Proposta (Enviada)
+            </PrimaryButton>
+            <PrimaryButton
+              fullWidth
+              onClick={() => handleSave('APPROVED')}
+              icon={<Repeat className="w-4 h-4" />}
+            >
+              Ativar Contrato Recorrente
+            </PrimaryButton>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+            <PrimaryButton
+              variant="secondary"
+              fullWidth
+              onClick={() => handleSave('DRAFT')}
+            >
+              Guardar Rascunho
+            </PrimaryButton>
+            <PrimaryButton fullWidth onClick={() => handleSave('SENT')}>
+              Guardar e Marcar Enviado
+            </PrimaryButton>
+          </div>
+        )}
       </div>
     </Modal>
   );
